@@ -1,17 +1,11 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import {
-  applyFilters, fmt, fmtCell, NUM_COLUMNS, sortRows, toCsv, totals,
+  applyFilters, fmtCell, NUM_COLUMNS, sortRows, toCsv,
   type Filters, type MonitorRow, type NumKey, type SortKey,
 } from "./logic";
 import { DEMO, fetchLastSync, fetchMonitor, fetchWarehouses, triggerSync, type SyncRun, type Warehouse } from "./data";
 
 const EMPTY: Filters = { sku: "", name: "", categoryId: null, onlyNegative: false };
-
-const KPI_STYLE: Record<NumKey | "count", string> = {
-  count: "k-neutral", disponible: "k-green", no_conforme: "k-orange", demo: "k-purple",
-  control_calidad: "k-blue", zona_franca: "k-neutral", total_fisico: "k-teal", en_camino: "k-teal",
-  disponible_mas_camino: "k-teal", comprometido: "k-teal", disponible_real: "k-hero",
-};
 
 function cellClass(key: NumKey, v: number): string {
   const c = ["num", `c-${key}`];
@@ -75,7 +69,6 @@ export default function Monitor({ email, onLogout }: { email: string | null; onL
   }, [rows]);
 
   const visible = useMemo(() => sortRows(applyFilters(rows, filters), sort.key, sort.dir), [rows, filters, sort]);
-  const t = useMemo(() => totals(visible), [visible]);
   const filtered = JSON.stringify(filters) !== JSON.stringify(EMPTY) || whSel.length > 0;
 
   const onSort = (key: SortKey) =>
@@ -149,25 +142,16 @@ export default function Monitor({ email, onLogout }: { email: string | null; onL
         {filtered && <button className="btn link" onClick={() => { setFilters(EMPTY); setWhSel([]); }}>Limpiar filtros</button>}
       </section>
 
-      <section className="kpis">
-        <div className={"kpi wide " + KPI_STYLE.count}><span>Productos listados</span><b>{fmt(t.count)}</b></div>
-        {NUM_COLUMNS.map((c) => (
-          <div key={c.key} className={"kpi " + KPI_STYLE[c.key] + (c.key === "disponible_real" && t[c.key] < 0 ? " neg" : "")}>
-            <span>{c.kpi}</span><b>{fmt(t[c.key])}</b>
-          </div>
-        ))}
-      </section>
-
       {error && <p className="warn">No se pudieron cargar los datos: {error}</p>}
 
       <div className="table-wrap">
         <table>
           <thead>
             <tr>
-              <th className="sku sticky1" onClick={() => onSort("sku")}>SKU{arrow("sku")}</th>
-              <th className="prod sticky2" onClick={() => onSort("name")}>Producto{arrow("name")}</th>
+              <th className="sku sticky1" data-tip="Código interno del producto en Odoo." onClick={() => onSort("sku")}>SKU{arrow("sku")}</th>
+              <th className="prod sticky2" data-tip="Nombre del producto. Pasá el mouse sobre una fila para ver su categoría." onClick={() => onSort("name")}>Producto{arrow("name")}</th>
               {NUM_COLUMNS.map((c) => (
-                <th key={c.key} className={"num h-" + c.key} onClick={() => onSort(c.key)}>{c.label}{arrow(c.key)}</th>
+                <th key={c.key} className={"num h-" + c.key} data-tip={c.hint} onClick={() => onSort(c.key)}>{c.label}{arrow(c.key)}</th>
               ))}
             </tr>
           </thead>

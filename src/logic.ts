@@ -19,17 +19,17 @@ export interface MonitorRow {
 export type NumKey = Exclude<keyof MonitorRow, "product_id" | "sku" | "name" | "category_id" | "category">;
 export type SortKey = "sku" | "name" | NumKey;
 
-export const NUM_COLUMNS: { key: NumKey; label: string; kpi: string }[] = [
-  { key: "disponible", label: "Disponible", kpi: "Disponible" },
-  { key: "no_conforme", label: "No conforme", kpi: "No conforme" },
-  { key: "demo", label: "Demo / Consignación", kpi: "Demo / Consignación" },
-  { key: "control_calidad", label: "Control de calidad", kpi: "Control de calidad" },
-  { key: "zona_franca", label: "Zona Franca (pend. liberación)", kpi: "Zona Franca" },
-  { key: "total_fisico", label: "Total físico", kpi: "Total físico" },
-  { key: "en_camino", label: "En camino", kpi: "En camino" },
-  { key: "disponible_mas_camino", label: "Disponible + en camino", kpi: "Disponible + en camino" },
-  { key: "comprometido", label: "Comprometido", kpi: "Comprometido" },
-  { key: "disponible_real", label: "Disponible real", kpi: "Disponible real" },
+export const NUM_COLUMNS: { key: NumKey; label: string; kpi: string; hint: string }[] = [
+  { key: "disponible", label: "Disponible", kpi: "Disponible", hint: "Stock en ubicación «Disponible», listo para vender." },
+  { key: "no_conforme", label: "No conforme", kpi: "No conforme", hint: "Unidades con fallas o rechazadas; no se pueden vender." },
+  { key: "demo", label: "Demo / Consignación", kpi: "Demo / Consignación", hint: "Unidades en demostración o en consignación en clientes." },
+  { key: "control_calidad", label: "Control de calidad", kpi: "Control de calidad", hint: "Recibido, en cuarentena esperando inspección." },
+  { key: "zona_franca", label: "Zona Franca (pend. liberación)", kpi: "Zona Franca", hint: "Mercadería en Zona Franca, pendiente de liberación." },
+  { key: "total_fisico", label: "Total físico", kpi: "Total físico", hint: "Disponible + No conforme + Demo + Control de calidad + Zona Franca." },
+  { key: "en_camino", label: "En camino", kpi: "En camino", hint: "Compras confirmadas que todavía no ingresaron." },
+  { key: "disponible_mas_camino", label: "Disponible + en camino", kpi: "Disponible + en camino", hint: "Disponible real + En camino." },
+  { key: "comprometido", label: "Comprometido", kpi: "Comprometido", hint: "Facturado al cliente pero aún no remitido." },
+  { key: "disponible_real", label: "Disponible real", kpi: "Disponible real", hint: "Lo que realmente se puede vender: Disponible − Comprometido." },
 ];
 
 export interface Filters {
