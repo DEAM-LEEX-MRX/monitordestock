@@ -1,0 +1,4 @@
+# La función valida su propio acceso (x-cron-secret o usuario @deam.com.ar),
+# por eso no exige el JWT de Supabase en la puerta.
+[functions.sync-odoo]
+verify_jwt = false
