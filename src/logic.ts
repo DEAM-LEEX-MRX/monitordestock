@@ -7,17 +7,22 @@ export interface MonitorRow {
   disponible: number;
   no_conforme: number;
   demo: number;
+  clientes_demo: string | null;
   control_calidad: number;
   zona_franca: number;
   total_fisico: number;
   en_camino: number;
+  llegada_estimada: string | null;
+  /** Fecha (YYYY-MM-DD) de la primera llegada; sirve para ordenar "Llegada estimada". */
+  proxima_llegada: string | null;
   disponible_mas_camino: number;
   comprometido: number;
   disponible_real: number;
 }
 
-export type NumKey = Exclude<keyof MonitorRow, "product_id" | "sku" | "name" | "category_id" | "category">;
-export type SortKey = "sku" | "name" | NumKey;
+export type TextKey = "clientes_demo" | "llegada_estimada";
+export type NumKey = Exclude<keyof MonitorRow, "product_id" | "sku" | "name" | "category_id" | "category" | TextKey | "proxima_llegada">;
+export type SortKey = "sku" | "name" | NumKey | TextKey;
 
 export const NUM_COLUMNS: { key: NumKey; label: string; kpi: string; hint: string }[] = [
   { key: "disponible", label: "Disponible", kpi: "Disponible", hint: "Stock en ubicación «Disponible», listo para vender." },
@@ -31,6 +36,22 @@ export const NUM_COLUMNS: { key: NumKey; label: string; kpi: string; hint: strin
   { key: "comprometido", label: "Comprometido", kpi: "Comprometido", hint: "Facturado al cliente pero aún no remitido." },
   { key: "disponible_real", label: "Disponible real", kpi: "Disponible real", hint: "Lo que realmente se puede vender: Disponible − Comprometido." },
 ];
+
+export const TEXT_COLUMNS: { key: TextKey; label: string; hint: string; after: NumKey }[] = [
+  { key: "clientes_demo", label: "Clientes demo", after: "demo",
+    hint: "Cliente que tiene cada unidad en demo / consignación (según la última entrega de esa serie)." },
+  { key: "llegada_estimada", label: "Llegada estimada", after: "en_camino",
+    hint: "Fecha prevista y cantidad de cada compra en camino. «atrasada» = la fecha ya pasó." },
+];
+
+/** Orden de columnas igual a la hoja: las de texto van al lado de la numérica que explican. */
+export type Column =
+  | { kind: "num"; key: NumKey; label: string; hint: string }
+  | { kind: "text"; key: TextKey; label: string; hint: string };
+export const COLUMNS: Column[] = NUM_COLUMNS.flatMap((c) => [
+  { kind: "num" as const, key: c.key, label: c.label, hint: c.hint },
+  ...TEXT_COLUMNS.filter((t) => t.after === c.key).map((t) => ({ kind: "text" as const, key: t.key, label: t.label, hint: t.hint })),
+]);
 
 export interface Filters {
   sku: string;
@@ -58,8 +79,9 @@ export function applyFilters(rows: MonitorRow[], f: Filters): MonitorRow[] {
 
 export function sortRows(rows: MonitorRow[], key: SortKey, dir: "asc" | "desc"): MonitorRow[] {
   const m = dir === "asc" ? 1 : -1;
+  const field: keyof MonitorRow = key === "llegada_estimada" ? "proxima_llegada" : key;
   return [...rows].sort((a, b) => {
-    const va = a[key], vb = b[key];
+    const va = a[field], vb = b[field];
     if (typeof va === "number" && typeof vb === "number") return (va - vb) * m;
     const sa = (va ?? "") as string, sb = (vb ?? "") as string;
     if (!sa && sb) return 1;   // vacíos siempre al final
@@ -81,12 +103,12 @@ export const fmt = (n: number) => nf.format(n);
 export const fmtCell = (n: number, showZero: boolean) => (n === 0 && !showZero ? "" : nf.format(n));
 
 export function toCsv(rows: MonitorRow[]): string {
-  const head = ["SKU", "Producto", "Categoría", ...NUM_COLUMNS.map((c) => c.label)];
+  const head = ["SKU", "Producto", "Categoría", ...COLUMNS.map((c) => c.label)];
   const esc = (v: unknown) => {
     const s = v === null || v === undefined ? "" : String(v);
     return /[";\n]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s;
   };
   const lines = rows.map((r) =>
-    [r.sku, r.name, r.category, ...NUM_COLUMNS.map((c) => String(r[c.key]).replace(".", ","))].map(esc).join(";"));
+    [r.sku, r.name, r.category, ...COLUMNS.map((c) => (c.kind === "num" ? String(r[c.key]).replace(".", ",") : r[c.key] ?? ""))].map(esc).join(";"));
   return "﻿" + [head.map(esc).join(";"), ...lines].join("\n");
 }

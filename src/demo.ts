@@ -23,11 +23,16 @@ const CATS = [
   { id: 12, name: "Insumos" }, { id: 13, name: "Accesorios" },
 ];
 
+const CLIENTS = ["Sanatorio Allende", "Clínica Reina Fabiola", "Hospital Privado", "cliente sin identificar"];
+const ddmm = (d: Date) => `${String(d.getDate()).padStart(2, "0")}/${String(d.getMonth() + 1).padStart(2, "0")}`;
+const iso = (d: Date) => d.toISOString().slice(0, 10);
+const addDays = (n: number) => { const d = new Date(); d.setDate(d.getDate() + n); return d; };
+
 function rng(seed: number) {
   return () => { seed = (seed * 1664525 + 1013904223) % 4294967296; return seed / 4294967296; };
 }
 
-interface Base { id: number; sku: string; name: string; cat: typeof CATS[number]; byWh: Record<number, number[]> }
+interface Base { id: number; sku: string; name: string; cat: typeof CATS[number]; byWh: Record<number, number[]>; arrivalDays: number[]; client: string }
 let cache: Base[] | null = null;
 
 function base(): Base[] {
@@ -43,7 +48,12 @@ function base(): Base[] {
     byWh[0] = [0, 0, pick(0.06, 4), 0, 0, 0, 0];
     byWh[2] = [0, 0, 0, 0, pick(0.05, 30), 0, 0];
     if (i % 37 === 5) byWh[1][6] += 12; // algunos negativos en disponible real
+    const arrivalDays = byWh[1][5] + byWh[4][5] + byWh[6][5] > 0
+      ? (r() < 0.3 ? [Math.floor(r() * 20) - 8, Math.floor(r() * 30) + 15] : [Math.floor(r() * 40) - 8])
+      : [];
     return {
+      arrivalDays,
+      client: CLIENTS[i % CLIENTS.length],
       id: 1000 + i,
       sku: `1000000000001${String(50073 + i * 7).padStart(5, "0")}`,
       name: i < NAMES.length ? NAMES[i] : `${NAMES[i % NAMES.length]} (var. ${Math.floor(i / NAMES.length)})`,
@@ -63,9 +73,17 @@ export function demoRows(whIds: number[] | null): MonitorRow[] {
         v.forEach((x, i) => (s[i] += x));
       }
       const [disponible, no_conforme, demo, control_calidad, zona_franca, en_camino, comprometido] = s;
+      const days = en_camino ? [...p.arrivalDays].sort((a, b) => a - b).slice(0, en_camino >= 2 ? 2 : 1) : [];
+      const parts = days.map((d, k) => {
+        const q = days.length === 1 ? en_camino : k === 0 ? Math.ceil(en_camino / 2) : en_camino - Math.ceil(en_camino / 2);
+        return `${ddmm(addDays(d))} (${q} u.)${d < 0 ? " atrasada" : ""}`;
+      });
       return {
         product_id: p.id, sku: p.sku, name: p.name, category_id: p.cat.id, category: p.cat.name,
         disponible, no_conforme, demo, control_calidad, zona_franca,
+        clientes_demo: demo ? p.client : null,
+        llegada_estimada: parts.length ? parts.join(" - ") : null,
+        proxima_llegada: days.length ? iso(addDays(days[0])) : null,
         total_fisico: disponible + no_conforme + demo + control_calidad + zona_franca,
         en_camino, comprometido,
         disponible_real: disponible - comprometido,

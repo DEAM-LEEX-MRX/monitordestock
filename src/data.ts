@@ -10,6 +10,8 @@ export const ALLOWED_DOMAIN = (import.meta.env.VITE_ALLOWED_DOMAIN as string | u
 
 export const supabase: SupabaseClient | null = DEMO ? null : createClient(url!, anon!);
 
+const TEXT_FIELDS = new Set(["sku", "name", "category", "clientes_demo", "llegada_estimada", "proxima_llegada"]);
+
 export interface Warehouse { id: number; name: string; code: string | null }
 export interface SyncRun { started_at: string; finished_at: string | null; status: string; message: string | null }
 
@@ -33,7 +35,7 @@ export async function fetchMonitor(warehouseIds: number[] | null): Promise<Monit
     const rows = (data ?? []) as MonitorRow[];
     out.push(...rows.map((r) => {
       const n = { ...r } as Record<string, unknown>;
-      for (const k of Object.keys(n)) if (k !== "sku" && k !== "name" && k !== "category" && n[k] !== null) n[k] = Number(n[k]);
+      for (const k of Object.keys(n)) if (!TEXT_FIELDS.has(k) && n[k] !== null) n[k] = Number(n[k]);
       return n as unknown as MonitorRow;
     }));
     if (rows.length < page) return out;

@@ -66,6 +66,11 @@ tbody tr:hover td { background: #e8f1f2; }
 td.sku { color: #374151; font-variant-numeric: tabular-nums; }
 td.prod { color: var(--text); max-width: 360px; overflow: hidden; text-overflow: ellipsis; }
 td.num { text-align: right; font-variant-numeric: tabular-nums; }
+thead th.txt { min-width: 150px; }
+td.txt { max-width: 240px; overflow: hidden; text-overflow: ellipsis; font-size: 12px; color: #374151; }
+td.c-clientes_demo { color: #6b3fa0; }
+td.c-llegada_estimada { color: #0e7c7b; }
+td.c-llegada_estimada.late { color: #b4530a; font-weight: 600; }
 
 /* columnas fijas a la izquierda */
 .sticky1 { position: sticky; left: 0; z-index: 1; min-width: 160px; }

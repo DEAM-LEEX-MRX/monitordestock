@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import {
-  applyFilters, fmtCell, NUM_COLUMNS, sortRows, toCsv,
+  applyFilters, COLUMNS, fmtCell, sortRows, toCsv,
   type Filters, type MonitorRow, type NumKey, type SortKey,
 } from "./logic";
 import { DEMO, fetchLastSync, fetchMonitor, fetchWarehouses, triggerSync, type SyncRun, type Warehouse } from "./data";
@@ -150,21 +150,25 @@ export default function Monitor({ email, onLogout }: { email: string | null; onL
             <tr>
               <th className="sku sticky1" data-tip="Código interno del producto en Odoo." onClick={() => onSort("sku")}>SKU{arrow("sku")}</th>
               <th className="prod sticky2" data-tip="Nombre del producto. Pasá el mouse sobre una fila para ver su categoría." onClick={() => onSort("name")}>Producto{arrow("name")}</th>
-              {NUM_COLUMNS.map((c) => (
-                <th key={c.key} className={"num h-" + c.key} data-tip={c.hint} onClick={() => onSort(c.key)}>{c.label}{arrow(c.key)}</th>
+              {COLUMNS.map((c) => (
+                <th key={c.key} className={(c.kind === "num" ? "num" : "txt") + " h-" + c.key} data-tip={c.hint} onClick={() => onSort(c.key)}>{c.label}{arrow(c.key)}</th>
               ))}
             </tr>
           </thead>
           <tbody>
-            {loading && <tr><td colSpan={12} className="empty">Cargando…</td></tr>}
-            {!loading && visible.length === 0 && <tr><td colSpan={12} className="empty">Sin productos para estos filtros.</td></tr>}
+            {loading && <tr><td colSpan={COLUMNS.length + 2} className="empty">Cargando…</td></tr>}
+            {!loading && visible.length === 0 && <tr><td colSpan={COLUMNS.length + 2} className="empty">Sin productos para estos filtros.</td></tr>}
             {visible.map((r) => (
               <tr key={r.product_id}>
                 <td className="sku sticky1">{r.sku ?? ""}</td>
                 <td className="prod sticky2" title={r.category ?? ""}>{r.name}</td>
-                {NUM_COLUMNS.map((c) => (
+                {COLUMNS.map((c) => c.kind === "num" ? (
                   <td key={c.key} className={cellClass(c.key, r[c.key])}>
                     {fmtCell(r[c.key], c.key === "disponible_real" || c.key === "disponible_mas_camino" || c.key === "disponible" || c.key === "total_fisico")}
+                  </td>
+                ) : (
+                  <td key={c.key} className={"txt c-" + c.key + (r[c.key]?.includes("atrasada") ? " late" : "")} title={r[c.key] ?? ""}>
+                    {r[c.key] ?? ""}
                   </td>
                 ))}
               </tr>
