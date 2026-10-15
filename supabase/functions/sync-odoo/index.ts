@@ -3,8 +3,8 @@
 // (usuario logueado con email de un dominio permitido).
 import { createClient, type SupabaseClient } from "npm:@supabase/supabase-js@2.45.4";
 import {
-  buildSnapshot, productIdsToShow,
-  type OdooLocation, type OdooMove, type OdooPickingType, type OdooProduct, type OdooQuant, type OdooWarehouse,
+  buildSnapshot, DEMO_LOCATION_NAMES, productIdsToShow,
+  type OdooLocation, type OdooMove, type OdooMoveLine, type OdooPickingType, type OdooProduct, type OdooQuant, type OdooWarehouse,
 } from "./transform.ts";
 
 const ODOO_URL = (Deno.env.get("ODOO_URL") ?? "").replace(/\/$/, "");
@@ -40,10 +40,14 @@ async function odoo<T>(model: string, method: string, body: Record<string, unkno
 }
 
 async function searchReadAll<T>(model: string, domain: unknown[], fields: string[], context: Record<string, unknown> = {}): Promise<T[]> {
+  return searchReadAllOrdered<T>(model, domain, fields, "id", context);
+}
+
+async function searchReadAllOrdered<T>(model: string, domain: unknown[], fields: string[], order: string, context: Record<string, unknown> = {}): Promise<T[]> {
   const out: T[] = [];
   const limit = 2000;
   for (let offset = 0; ; offset += limit) {
-    const page = await odoo<T[]>(model, "search_read", { domain, fields, limit, offset, order: "id", context });
+    const page = await odoo<T[]>(model, "search_read", { domain, fields, limit, offset, order, context });
     out.push(...page);
     if (page.length < limit) return out;
   }
@@ -97,27 +101,42 @@ Deno.serve(async (req) => {
     const [warehouses, locations, quants, incoming, committed] = await Promise.all([
       searchReadAll<OdooWarehouse>("stock.warehouse", [], ["name", "code"]),
       searchReadAll<OdooLocation>("stock.location", [["usage", "=", "internal"]], ["name", "warehouse_id"], { active_test: false }),
-      searchReadAll<OdooQuant>("stock.quant", DOMAIN_QUANTS, ["product_id", "location_id", "quantity"]),
-      searchReadAll<OdooMove>("stock.move", DOMAIN_EN_CAMINO, ["product_id", "product_qty", "picking_type_id"]),
+      searchReadAll<OdooQuant>("stock.quant", DOMAIN_QUANTS, ["product_id", "location_id", "quantity", "lot_id"]),
+      searchReadAll<OdooMove>("stock.move", DOMAIN_EN_CAMINO, ["product_id", "product_qty", "picking_type_id", "date"]),
       searchReadAll<OdooMove>("stock.move", DOMAIN_COMPROMETIDO, ["product_id", "product_qty", "picking_type_id"]),
     ]);
 
     const ptIds = [...new Set([...incoming, ...committed].map((m) => (m.picking_type_id ? m.picking_type_id[0] : 0)).filter(Boolean))];
     const productIds = productIdsToShow(quants, incoming, committed);
 
-    const [pickingTypes, products] = await Promise.all([
+    // Productos que hoy están en Consignación-Demo (para buscar a qué cliente se entregaron)
+    const demoLocIds = new Set(locations.filter((l) => DEMO_LOCATION_NAMES.includes(l.name)).map((l) => l.id));
+    const demoProductIds = [...new Set(quants
+      .filter((q) => q.location_id && demoLocIds.has(q.location_id[0]) && q.product_id)
+      .map((q) => (q.product_id as [number, string])[0]))];
+
+    const [pickingTypes, products, demoMoveLines] = await Promise.all([
       ptIds.length
         ? searchReadAll<OdooPickingType>("stock.picking.type", [["id", "in", ptIds]], ["warehouse_id"], { active_test: false })
         : Promise.resolve([] as OdooPickingType[]),
       productIds.length
         ? searchReadAll<OdooProduct>("product.product", [["id", "in", productIds]], ["default_code", "name", "categ_id"])
         : Promise.resolve([] as OdooProduct[]),
+      demoProductIds.length
+        ? searchReadAllOrdered<OdooMoveLine>("stock.move.line", [
+            ["location_dest_id.usage", "=", "internal"],
+            ["location_dest_id.name", "in", DEMO_LOCATION_NAMES],
+            ["state", "=", "done"],
+            ["product_id", "in", demoProductIds],
+          ], ["product_id", "lot_id", "picking_partner_id", "date"], "date desc, id desc")
+        : Promise.resolve([] as OdooMoveLine[]),
     ]);
 
-    const snap = buildSnapshot({ warehouses, locations, quants, incoming, committed, pickingTypes, products });
+    const snap = buildSnapshot({ warehouses, locations, quants, incoming, committed, pickingTypes, products, demoMoveLines });
 
     const { data: n, error } = await admin.rpc("replace_snapshot", {
       p_warehouses: snap.warehouses, p_products: snap.products, p_stock: snap.stock,
+      p_incoming: snap.incoming, p_demo_clients: snap.demoClients,
     });
     if (error) throw new Error(`Supabase: ${error.message}`);
 

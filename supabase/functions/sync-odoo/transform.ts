@@ -5,8 +5,10 @@ export type M2O = [number, string] | false;
 
 export interface OdooWarehouse { id: number; name: string; code: string | false }
 export interface OdooLocation { id: number; name: string; warehouse_id: M2O }
-export interface OdooQuant { product_id: M2O; location_id: M2O; quantity: number }
-export interface OdooMove { product_id: M2O; product_qty: number; picking_type_id: M2O }
+export interface OdooQuant { product_id: M2O; location_id: M2O; quantity: number; lot_id?: M2O }
+export interface OdooMove { product_id: M2O; product_qty: number; picking_type_id: M2O; date?: string | false }
+/** Movimiento hecho hacia Consignación-Demo: dice a qué cliente se entregó cada serie. */
+export interface OdooMoveLine { product_id: M2O; lot_id: M2O; picking_partner_id: M2O; date: string | false }
 export interface OdooPickingType { id: number; warehouse_id: M2O }
 export interface OdooProduct { id: number; default_code: string | false; name: string; categ_id: M2O }
 
@@ -20,6 +22,11 @@ export const LOCATION_BUCKETS: Record<string, Bucket> = {
   "Recepción / Cuarentena": "control_calidad",
   "Pendiente de liberación": "zona_franca",
 };
+
+/** Nombres de ubicación que cuentan como Demo / Consignación. */
+export const DEMO_LOCATION_NAMES = Object.entries(LOCATION_BUCKETS).filter(([, b]) => b === "demo").map(([n]) => n);
+export const SIN_CLIENTE = "cliente sin identificar";
+const TZ = "America/Argentina/Buenos_Aires";
 
 export const NO_WAREHOUSE = { id: 0, name: "Sin depósito", code: "—" };
 
@@ -35,10 +42,23 @@ export interface StockRow {
   comprometido: number;
 }
 
+/** En camino agrupado por día de llegada (columna "Llegada estimada"). */
+export interface IncomingRow { product_id: number; warehouse_id: number; day: string; qty: number }
+/** Cliente que tiene cada producto en demo (columna "Clientes demo"). */
+export interface DemoClientRow { product_id: number; warehouse_id: number; client: string; qty: number }
+
 export interface Snapshot {
   warehouses: { id: number; name: string; code: string | null }[];
   products: { id: number; sku: string | null; name: string; category_id: number | null; category: string | null }[];
   stock: StockRow[];
+  incoming: IncomingRow[];
+  demoClients: DemoClientRow[];
+}
+
+/** Fecha/hora UTC de Odoo ("2026-10-20 13:00:00") → día en hora Argentina ("2026-10-20"). */
+export function localDay(odooDatetime: string): string {
+  const d = new Date(odooDatetime.replace(" ", "T") + "Z");
+  return new Intl.DateTimeFormat("en-CA", { timeZone: TZ, year: "numeric", month: "2-digit", day: "2-digit" }).format(d);
 }
 
 const id = (v: M2O) => (v ? v[0] : null);
@@ -60,6 +80,8 @@ export function buildSnapshot(input: {
   committed: OdooMove[];
   pickingTypes: OdooPickingType[];
   products: OdooProduct[];
+  /** Entradas hechas a Consignación-Demo, de la más nueva a la más vieja. */
+  demoMoveLines?: OdooMoveLine[];
 }): Snapshot {
   const locById = new Map(input.locations.map((l) => [l.id, l]));
   const ptWarehouse = new Map(input.pickingTypes.map((p) => [p.id, id(p.warehouse_id) ?? 0]));
@@ -106,6 +128,42 @@ export function buildSnapshot(input: {
     en_camino: round(r.en_camino), comprometido: round(r.comprometido),
   }));
 
+  // ---- Llegada estimada: en camino sumado por producto × depósito × día
+  const inc = new Map<string, IncomingRow>();
+  for (const m of input.incoming) {
+    const pid = id(m.product_id);
+    if (!pid || !validProducts.has(pid) || !m.date) continue;
+    const wh = ptWarehouse.get(id(m.picking_type_id) ?? -1) ?? 0;
+    const day = localDay(m.date);
+    const key = `${pid}:${wh}:${day}`;
+    const r = inc.get(key) ?? { product_id: pid, warehouse_id: wh, day, qty: 0 };
+    r.qty += m.product_qty;
+    inc.set(key, r);
+  }
+  const incoming = [...inc.values()].map((r) => ({ ...r, qty: round(r.qty) }));
+
+  // ---- Clientes demo: cada serie en Consignación-Demo → cliente de la última entrega de esa serie
+  const lastClient = new Map<string, string>();
+  for (const ml of input.demoMoveLines ?? []) {           // vienen de la más nueva a la más vieja
+    const key = `${id(ml.product_id)}|${id(ml.lot_id) ?? ""}`;
+    if (!lastClient.has(key) && ml.picking_partner_id) lastClient.set(key, ml.picking_partner_id[1]);
+  }
+  const dc = new Map<string, DemoClientRow>();
+  for (const q of input.quants) {
+    const pid = id(q.product_id);
+    const lid = id(q.location_id);
+    if (!pid || !lid || !validProducts.has(pid) || q.quantity === 0) continue;
+    const loc = locById.get(lid);
+    if (!loc || !DEMO_LOCATION_NAMES.includes(loc.name)) continue;
+    const wh = id(loc.warehouse_id) ?? 0;
+    const client = lastClient.get(`${pid}|${id(q.lot_id ?? false) ?? ""}`) ?? SIN_CLIENTE;
+    const key = `${pid}:${wh}:${client}`;
+    const r = dc.get(key) ?? { product_id: pid, warehouse_id: wh, client, qty: 0 };
+    r.qty += q.quantity;
+    dc.set(key, r);
+  }
+  const demoClients = [...dc.values()].map((r) => ({ ...r, qty: round(r.qty) }));
+
   const usedProducts = new Set(stock.map((s) => s.product_id));
   const products = input.products
     .filter((p) => usedProducts.has(p.id))
@@ -122,5 +180,5 @@ export function buildSnapshot(input: {
     ...input.warehouses.map((w) => ({ id: w.id, name: w.name, code: w.code || null })),
   ];
 
-  return { warehouses, products, stock };
+  return { warehouses, products, stock, incoming, demoClients };
 }
