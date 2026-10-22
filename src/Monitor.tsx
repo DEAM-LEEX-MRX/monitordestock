@@ -10,7 +10,8 @@ const EMPTY: Filters = { sku: "", name: "", categoryId: null, onlyNegative: fals
 function cellClass(key: NumKey, v: number): string {
   const c = ["num", `c-${key}`];
   if (v > 0 && (key === "no_conforme" || key === "en_camino" || key === "control_calidad" || key === "demo")) c.push("pos");
-  if (v < 0 && (key === "disponible_real" || key === "disponible_mas_camino")) c.push("neg");
+  if (v > 0 && key === "reservado_bloqueado") c.push("pos");
+  if (v < 0 && (key === "disponible_real" || key === "disponible_mas_camino" || key === "disponible_real_con_bloqueado")) c.push("neg");
   return c.join(" ");
 }
 
@@ -164,7 +165,7 @@ export default function Monitor({ email, onLogout }: { email: string | null; onL
                 <td className="prod sticky2" title={r.category ?? ""}>{r.name}</td>
                 {COLUMNS.map((c) => c.kind === "num" ? (
                   <td key={c.key} className={cellClass(c.key, r[c.key])}>
-                    {fmtCell(r[c.key], c.key === "disponible_real" || c.key === "disponible_mas_camino" || c.key === "disponible" || c.key === "total_fisico")}
+                    {fmtCell(r[c.key], c.key === "disponible_real" || c.key === "disponible_real_con_bloqueado" || c.key === "disponible_mas_camino" || c.key === "disponible" || c.key === "total_fisico")}
                   </td>
                 ) : (
                   <td key={c.key} className={"txt c-" + c.key + (r[c.key]?.includes("atrasada") ? " late" : "")} title={r[c.key] ?? ""}>
@@ -177,7 +178,7 @@ export default function Monitor({ email, onLogout }: { email: string | null; onL
         </table>
       </div>
       <footer className="foot">
-        Disponible real = Disponible − Comprometido (facturado no remitido) · Disponible + en camino = Disponible real + En camino · Total físico = Disponible + No conforme + Demo + Control de calidad + Zona Franca
+        Disponible real = Disponible − Comprometido (facturado no remitido, en Odoo o SAP) · Disponible real c/ bloqueado = Disponible real − Reservado bloqueado (pedidos bloqueados sin facturar) · Disponible + en camino = Disponible real + En camino · Total físico = Disponible + No conforme + Demo + Control de calidad + Zona Franca
       </footer>
     </div>
   );

@@ -29,7 +29,7 @@ export async function fetchMonitor(warehouseIds: number[] | null): Promise<Monit
   const page = 1000;
   for (let from = 0; ; from += page) {
     const { data, error } = await supabase
-      .rpc("monitor", { p_warehouse_ids: warehouseIds })
+      .rpc("monitor_v2", { p_warehouse_ids: warehouseIds })
       .range(from, from + page - 1);
     if (error) throw error;
     const rows = (data ?? []) as MonitorRow[];

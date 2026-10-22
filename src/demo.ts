@@ -88,6 +88,8 @@ export function demoRows(whIds: number[] | null): MonitorRow[] {
         en_camino, comprometido,
         disponible_real: disponible - comprometido,
         disponible_mas_camino: disponible - comprometido + en_camino,
+        reservado_bloqueado: 0,
+        disponible_real_con_bloqueado: disponible - comprometido,
       };
     })
     .filter((r) => r.total_fisico || r.en_camino || r.comprometido);

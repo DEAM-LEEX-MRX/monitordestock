@@ -18,6 +18,10 @@ export interface MonitorRow {
   disponible_mas_camino: number;
   comprometido: number;
   disponible_real: number;
+  /** Pendiente de entrega de órdenes bloqueadas sin facturar. */
+  reservado_bloqueado: number;
+  /** Disponible real − Reservado bloqueado. */
+  disponible_real_con_bloqueado: number;
 }
 
 export type TextKey = "clientes_demo" | "llegada_estimada";
@@ -34,7 +38,9 @@ export const NUM_COLUMNS: { key: NumKey; label: string; kpi: string; hint: strin
   { key: "en_camino", label: "En camino", kpi: "En camino", hint: "Compras confirmadas que todavía no ingresaron." },
   { key: "disponible_mas_camino", label: "Disponible + en camino", kpi: "Disponible + en camino", hint: "Disponible real + En camino." },
   { key: "comprometido", label: "Comprometido", kpi: "Comprometido", hint: "Facturado al cliente pero aún no remitido." },
+  { key: "reservado_bloqueado", label: "Reservado bloqueado", kpi: "Reservado bloqueado", hint: "Pedidos en estado operativo «Bloqueado» todavía sin facturar (ni en Odoo ni en SAP), pendientes de entrega." },
   { key: "disponible_real", label: "Disponible real", kpi: "Disponible real", hint: "Lo que realmente se puede vender: Disponible − Comprometido." },
+  { key: "disponible_real_con_bloqueado", label: "Disponible real c/ bloqueado", kpi: "Disponible real c/ bloqueado", hint: "Disponible real − Reservado bloqueado: lo que quedaría si se liberan los pedidos bloqueados." },
 ];
 
 export const TEXT_COLUMNS: { key: TextKey; label: string; hint: string; after: NumKey }[] = [

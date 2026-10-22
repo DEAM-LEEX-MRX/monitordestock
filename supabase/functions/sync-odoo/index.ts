@@ -60,10 +60,27 @@ const DOMAIN_EN_CAMINO = [
   ["state", "not in", ["done", "cancel"]],
   ["purchase_line_id", "!=", false],
 ];
+// Comprometido = facturado no remitido. Cuenta como facturado lo facturado en Odoo
+// (qty_invoiced > 0) o las órdenes migradas de SAP que tienen N° de factura SAP
+// (en Odoo esas líneas quedan con qty_invoiced = 0).
 const DOMAIN_COMPROMETIDO = [
   ["picking_type_id.code", "=", "outgoing"],
   ["state", "not in", ["done", "cancel"]],
+  ["sale_line_id", "!=", false],
+  "|",
   ["sale_line_id.qty_invoiced", ">", 0],
+  ["sale_line_id.order_id.x_studio_sap_factura_nro", "!=", false],
+];
+// Reservado bloqueado = salidas pendientes de órdenes con Estado operativo "Bloqueado"
+// que NO están facturadas (ni en Odoo ni en SAP). Es el complemento exacto de
+// DOMAIN_COMPROMETIDO dentro de las bloqueadas, así nada se cuenta dos veces.
+const DOMAIN_RESERVADO_BLOQUEADO = [
+  ["picking_type_id.code", "=", "outgoing"],
+  ["state", "not in", ["done", "cancel"]],
+  ["sale_line_id", "!=", false],
+  ["sale_line_id.order_id.x_estado_operativo", "=", "bloqueado"],
+  ["sale_line_id.qty_invoiced", "<=", 0],
+  ["sale_line_id.order_id.x_studio_sap_factura_nro", "=", false],
 ];
 
 // ---------- Autorización ----------------------------------------------
@@ -98,16 +115,17 @@ Deno.serve(async (req) => {
     admin.from("sync_runs").update({ finished_at: new Date().toISOString(), ...patch }).eq("id", run!.id);
 
   try {
-    const [warehouses, locations, quants, incoming, committed] = await Promise.all([
+    const [warehouses, locations, quants, incoming, committed, blocked] = await Promise.all([
       searchReadAll<OdooWarehouse>("stock.warehouse", [], ["name", "code"]),
       searchReadAll<OdooLocation>("stock.location", [["usage", "=", "internal"]], ["name", "warehouse_id"], { active_test: false }),
       searchReadAll<OdooQuant>("stock.quant", DOMAIN_QUANTS, ["product_id", "location_id", "quantity", "lot_id"]),
       searchReadAll<OdooMove>("stock.move", DOMAIN_EN_CAMINO, ["product_id", "product_qty", "picking_type_id", "date"]),
       searchReadAll<OdooMove>("stock.move", DOMAIN_COMPROMETIDO, ["product_id", "product_qty", "picking_type_id"]),
+      searchReadAll<OdooMove>("stock.move", DOMAIN_RESERVADO_BLOQUEADO, ["product_id", "product_qty", "picking_type_id"]),
     ]);
 
-    const ptIds = [...new Set([...incoming, ...committed].map((m) => (m.picking_type_id ? m.picking_type_id[0] : 0)).filter(Boolean))];
-    const productIds = productIdsToShow(quants, incoming, committed);
+    const ptIds = [...new Set([...incoming, ...committed, ...blocked].map((m) => (m.picking_type_id ? m.picking_type_id[0] : 0)).filter(Boolean))];
+    const productIds = productIdsToShow(quants, incoming, committed, blocked);
 
     // Productos que hoy están en Consignación-Demo (para buscar a qué cliente se entregaron)
     const demoLocIds = new Set(locations.filter((l) => DEMO_LOCATION_NAMES.includes(l.name)).map((l) => l.id));
@@ -115,13 +133,16 @@ Deno.serve(async (req) => {
       .filter((q) => q.location_id && demoLocIds.has(q.location_id[0]) && q.product_id)
       .map((q) => (q.product_id as [number, string])[0]))];
 
+    // Todos los productos activos de tipo "Bienes" de Odoo, más los que tengan movimiento.
+    const DOMAIN_PRODUCTS = productIds.length
+      ? ["|", ["type", "=", "consu"], ["id", "in", productIds]]
+      : [["type", "=", "consu"]];
+
     const [pickingTypes, products, demoMoveLines] = await Promise.all([
       ptIds.length
         ? searchReadAll<OdooPickingType>("stock.picking.type", [["id", "in", ptIds]], ["warehouse_id"], { active_test: false })
         : Promise.resolve([] as OdooPickingType[]),
-      productIds.length
-        ? searchReadAll<OdooProduct>("product.product", [["id", "in", productIds]], ["default_code", "name", "categ_id"])
-        : Promise.resolve([] as OdooProduct[]),
+      searchReadAll<OdooProduct>("product.product", DOMAIN_PRODUCTS, ["default_code", "name", "categ_id"]),
       demoProductIds.length
         ? searchReadAllOrdered<OdooMoveLine>("stock.move.line", [
             ["location_dest_id.usage", "=", "internal"],
@@ -132,7 +153,7 @@ Deno.serve(async (req) => {
         : Promise.resolve([] as OdooMoveLine[]),
     ]);
 
-    const snap = buildSnapshot({ warehouses, locations, quants, incoming, committed, pickingTypes, products, demoMoveLines });
+    const snap = buildSnapshot({ warehouses, locations, quants, incoming, committed, blocked, pickingTypes, products, demoMoveLines });
 
     const { data: n, error } = await admin.rpc("replace_snapshot", {
       p_warehouses: snap.warehouses, p_products: snap.products, p_stock: snap.stock,
@@ -140,8 +161,17 @@ Deno.serve(async (req) => {
     });
     if (error) throw new Error(`Supabase: ${error.message}`);
 
+    // Reservado bloqueado: se escribe aparte sobre las filas recién cargadas
+    const reservado = snap.stock
+      .filter((s) => s.reservado_bloqueado !== 0)
+      .map((s) => ({ product_id: s.product_id, warehouse_id: s.warehouse_id, qty: s.reservado_bloqueado }));
+    if (reservado.length) {
+      const { error: e2 } = await admin.rpc("set_reservado_bloqueado", { p_rows: reservado });
+      if (e2) throw new Error(`Supabase (reservado bloqueado): ${e2.message}`);
+    }
+
     await finish({ status: "ok", products: snap.products.length, rows: n });
-    return json({ ok: true, products: snap.products.length, rows: n });
+    return json({ ok: true, products: snap.products.length, rows: n, reservado_bloqueado: reservado.length });
   } catch (e) {
     const message = e instanceof Error ? e.message : String(e);
     console.error(message);

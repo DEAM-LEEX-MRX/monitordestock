@@ -101,6 +101,17 @@ describe("sync transform", () => {
   it("agrega 'Sin depósito' y respeta la lista de productos a mostrar", () => {
     expect(snap.warehouses[0]).toMatchObject({ id: 0 });
     expect(productIdsToShow(quants, incoming, committed)).toEqual([1, 2, 3, 4, 5]);
+  });});
+
+describe("reservado bloqueado", () => {
+  const blocked = [{ product_id: [1, "P1"], product_qty: 3, picking_type_id: [200, "Entregas CBA"] }] as never[];
+  const snap = buildSnapshot({ warehouses, locations, quants, incoming, committed, blocked, pickingTypes, products });
+  it("suma las salidas de pedidos bloqueados sin tocar el comprometido", () => {
+    const r = snap.stock.find((s) => s.product_id === 1 && s.warehouse_id === 1);
+    expect(r).toMatchObject({ comprometido: 6, reservado_bloqueado: 3 });
+  });
+  it("los productos con solo reservado bloqueado entran en la lista a mostrar", () => {
+    expect(productIdsToShow([], [], [], [{ product_id: [9, "P9"], product_qty: 1, picking_type_id: false }])).toEqual([9]);
   });
 });
 
@@ -108,7 +119,7 @@ const row = (o: Partial<MonitorRow>): MonitorRow => ({
   product_id: 1, sku: "A", name: "x", category_id: 1, category: "c", disponible: 0, no_conforme: 0, demo: 0,
   clientes_demo: null, control_calidad: 0, zona_franca: 0, total_fisico: 0, en_camino: 0,
   llegada_estimada: null, proxima_llegada: null, disponible_mas_camino: 0,
-  comprometido: 0, disponible_real: 0, ...o,
+  comprometido: 0, disponible_real: 0, reservado_bloqueado: 0, disponible_real_con_bloqueado: 0, ...o,
 });
 
 describe("web logic", () => {

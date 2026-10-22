@@ -59,6 +59,8 @@ thead th {
 }
 thead th.num { text-align: center; min-width: 96px; }
 thead th.h-disponible_real { background: var(--green); }
+thead th.h-reservado_bloqueado { background: #b4530a; }
+thead th.h-disponible_real_con_bloqueado { background: #4b6b2f; }
 tbody tr:nth-child(even) td { background: var(--zebra); }
 tbody tr:nth-child(odd) td { background: #fff; }
 tbody tr:hover td { background: #e8f1f2; }
@@ -97,6 +99,8 @@ td.c-demo.pos        { color: #6b3fa0; font-weight: 700; }
 td.c-total_fisico    { font-weight: 700; }
 td.c-disponible_mas_camino, td.c-comprometido { color: var(--teal); font-weight: 700; }
 td.c-disponible_real { background: var(--green-soft) !important; color: var(--green); font-weight: 800; font-size: 14px; }
+td.c-reservado_bloqueado.pos { background: #fdeee3 !important; color: #b4530a; font-weight: 700; }
+td.c-disponible_real_con_bloqueado { font-weight: 700; color: #4b6b2f; }
 td.neg { background: var(--neg-bg) !important; color: var(--neg) !important; font-weight: 700; }
 
 td.empty { text-align: center; color: var(--muted); padding: 30px; }

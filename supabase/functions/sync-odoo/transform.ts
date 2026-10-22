@@ -40,6 +40,8 @@ export interface StockRow {
   zona_franca: number;
   en_camino: number;
   comprometido: number;
+  /** Pendiente de entrega de órdenes en estado operativo "Bloqueado" que todavía no se facturaron. */
+  reservado_bloqueado: number;
 }
 
 /** En camino agrupado por día de llegada (columna "Llegada estimada"). */
@@ -65,10 +67,10 @@ const id = (v: M2O) => (v ? v[0] : null);
 const round = (n: number) => Math.round(n * 10000) / 10000;
 
 /** Ids de productos que la lista de Odoo mostraría (stock interno ≠ 0, en camino o comprometido). */
-export function productIdsToShow(quants: OdooQuant[], incoming: OdooMove[], committed: OdooMove[]): number[] {
+export function productIdsToShow(quants: OdooQuant[], incoming: OdooMove[], committed: OdooMove[], blocked: OdooMove[] = []): number[] {
   const ids = new Set<number>();
   for (const q of quants) if (q.quantity !== 0 && id(q.product_id)) ids.add(id(q.product_id)!);
-  for (const m of [...incoming, ...committed]) if (id(m.product_id)) ids.add(id(m.product_id)!);
+  for (const m of [...incoming, ...committed, ...blocked]) if (id(m.product_id)) ids.add(id(m.product_id)!);
   return [...ids].sort((a, b) => a - b);
 }
 
@@ -78,6 +80,8 @@ export function buildSnapshot(input: {
   quants: OdooQuant[];
   incoming: OdooMove[];
   committed: OdooMove[];
+  /** Salidas pendientes de órdenes bloqueadas sin facturar. */
+  blocked?: OdooMove[];
   pickingTypes: OdooPickingType[];
   products: OdooProduct[];
   /** Entradas hechas a Consignación-Demo, de la más nueva a la más vieja. */
@@ -93,7 +97,7 @@ export function buildSnapshot(input: {
     let r = rows.get(key);
     if (!r) {
       r = { product_id: productId, warehouse_id: warehouseId, disponible: 0, no_conforme: 0, demo: 0,
-            control_calidad: 0, zona_franca: 0, en_camino: 0, comprometido: 0 };
+            control_calidad: 0, zona_franca: 0, en_camino: 0, comprometido: 0, reservado_bloqueado: 0 };
       rows.set(key, r);
     }
     return r;
@@ -110,7 +114,7 @@ export function buildSnapshot(input: {
     if (bucket) r[bucket] += q.quantity;
   }
 
-  const addMoves = (moves: OdooMove[], field: "en_camino" | "comprometido") => {
+  const addMoves = (moves: OdooMove[], field: "en_camino" | "comprometido" | "reservado_bloqueado") => {
     for (const m of moves) {
       const pid = id(m.product_id);
       if (!pid || !validProducts.has(pid)) continue;
@@ -120,12 +124,19 @@ export function buildSnapshot(input: {
   };
   addMoves(input.incoming, "en_camino");
   addMoves(input.committed, "comprometido");
+  addMoves(input.blocked ?? [], "reservado_bloqueado");
+
+  // Todos los productos de Odoo aparecen en el monitor: los que no tienen stock ni
+  // movimientos van con una fila en cero en "Sin depósito".
+  const withRow = new Set([...rows.values()].map((r) => r.product_id));
+  for (const p of input.products) if (!withRow.has(p.id)) row(p.id, NO_WAREHOUSE.id);
 
   const stock = [...rows.values()].map((r) => ({
     ...r,
     disponible: round(r.disponible), no_conforme: round(r.no_conforme), demo: round(r.demo),
     control_calidad: round(r.control_calidad), zona_franca: round(r.zona_franca),
     en_camino: round(r.en_camino), comprometido: round(r.comprometido),
+    reservado_bloqueado: round(r.reservado_bloqueado),
   }));
 
   // ---- Llegada estimada: en camino sumado por producto × depósito × día
