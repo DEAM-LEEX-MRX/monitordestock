@@ -1,0 +1,390 @@
+From 67b7a7c31d2eb711ba8eef14f52073dbd6b6dc22 Mon Sep 17 00:00:00 2001
+From: Claude <noreply@anthropic.com>
+Date: Thu, 22 Oct 2026 17:35:01 +0000
+Subject: [PATCH] Comprometido incluye facturas SAP; nueva columna Reservado
+ bloqueado
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+- Sync: Comprometido cuenta también órdenes con N° de factura SAP (qty_invoiced = 0 en Odoo).
+- Sync: Reservado bloqueado = salidas pendientes de órdenes Bloqueadas sin facturar.
+- Web: usa monitor_v2 y muestra Reservado bloqueado y Disponible real c/ bloqueado.
+- Migración con la columna, set_reservado_bloqueado y monitor_v2.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_017gUHVt7bxk16qWNhLZqMXJ
+---
+ src/Monitor.tsx                               |  7 +--
+ src/data.ts                                   |  2 +-
+ src/demo.ts                                   |  2 +
+ src/logic.ts                                  |  6 +++
+ src/styles.css                                |  4 ++
+ supabase/functions/sync-odoo/index.ts         | 46 +++++++++++++++----
+ supabase/functions/sync-odoo/transform.ts     | 19 ++++++--
+ .../20261022170000_reservado_bloqueado.sql    | 43 +++++++++++++++++
+ tests/transform.test.ts                       | 13 +++++-
+ 9 files changed, 125 insertions(+), 17 deletions(-)
+ create mode 100644 supabase/migrations/20261022170000_reservado_bloqueado.sql
+
+diff --git a/src/Monitor.tsx b/src/Monitor.tsx
+index cca1c53..ad5dbd5 100644
+--- a/src/Monitor.tsx
++++ b/src/Monitor.tsx
+@@ -10,7 +10,8 @@ const EMPTY: Filters = { sku: "", name: "", categoryId: null, onlyNegative: fals
+ function cellClass(key: NumKey, v: number): string {
+   const c = ["num", `c-${key}`];
+   if (v > 0 && (key === "no_conforme" || key === "en_camino" || key === "control_calidad" || key === "demo")) c.push("pos");
+-  if (v < 0 && (key === "disponible_real" || key === "disponible_mas_camino")) c.push("neg");
++  if (v > 0 && key === "reservado_bloqueado") c.push("pos");
++  if (v < 0 && (key === "disponible_real" || key === "disponible_mas_camino" || key === "disponible_real_con_bloqueado")) c.push("neg");
+   return c.join(" ");
+ }
+ 
+@@ -164,7 +165,7 @@ export default function Monitor({ email, onLogout }: { email: string | null; onL
+                 <td className="prod sticky2" title={r.category ?? ""}>{r.name}</td>
+                 {COLUMNS.map((c) => c.kind === "num" ? (
+                   <td key={c.key} className={cellClass(c.key, r[c.key])}>
+-                    {fmtCell(r[c.key], c.key === "disponible_real" || c.key === "disponible_mas_camino" || c.key === "disponible" || c.key === "total_fisico")}
++                    {fmtCell(r[c.key], c.key === "disponible_real" || c.key === "disponible_real_con_bloqueado" || c.key === "disponible_mas_camino" || c.key === "disponible" || c.key === "total_fisico")}
+                   </td>
+                 ) : (
+                   <td key={c.key} className={"txt c-" + c.key + (r[c.key]?.includes("atrasada") ? " late" : "")} title={r[c.key] ?? ""}>
+@@ -177,7 +178,7 @@ export default function Monitor({ email, onLogout }: { email: string | null; onL
+         </table>
+       </div>
+       <footer className="foot">
+-        Disponible real = Disponible − Comprometido (facturado no remitido) · Disponible + en camino = Disponible real + En camino · Total físico = Disponible + No conforme + Demo + Control de calidad + Zona Franca
++        Disponible real = Disponible − Comprometido (facturado no remitido, en Odoo o SAP) · Disponible real c/ bloqueado = Disponible real − Reservado bloqueado (pedidos bloqueados sin facturar) · Disponible + en camino = Disponible real + En camino · Total físico = Disponible + No conforme + Demo + Control de calidad + Zona Franca
+       </footer>
+     </div>
+   );
+diff --git a/src/data.ts b/src/data.ts
+index b5de871..6abe7f8 100644
+--- a/src/data.ts
++++ b/src/data.ts
+@@ -29,7 +29,7 @@ export async function fetchMonitor(warehouseIds: number[] | null): Promise<Monit
+   const page = 1000;
+   for (let from = 0; ; from += page) {
+     const { data, error } = await supabase
+-      .rpc("monitor", { p_warehouse_ids: warehouseIds })
++      .rpc("monitor_v2", { p_warehouse_ids: warehouseIds })
+       .range(from, from + page - 1);
+     if (error) throw error;
+     const rows = (data ?? []) as MonitorRow[];
+diff --git a/src/demo.ts b/src/demo.ts
+index ecdd496..bc0deeb 100644
+--- a/src/demo.ts
++++ b/src/demo.ts
+@@ -88,6 +88,8 @@ export function demoRows(whIds: number[] | null): MonitorRow[] {
+         en_camino, comprometido,
+         disponible_real: disponible - comprometido,
+         disponible_mas_camino: disponible - comprometido + en_camino,
++        reservado_bloqueado: 0,
++        disponible_real_con_bloqueado: disponible - comprometido,
+       };
+     })
+     .filter((r) => r.total_fisico || r.en_camino || r.comprometido);
+diff --git a/src/logic.ts b/src/logic.ts
+index 9ebfd97..073af03 100644
+--- a/src/logic.ts
++++ b/src/logic.ts
+@@ -18,6 +18,10 @@ export interface MonitorRow {
+   disponible_mas_camino: number;
+   comprometido: number;
+   disponible_real: number;
++  /** Pendiente de entrega de órdenes bloqueadas sin facturar. */
++  reservado_bloqueado: number;
++  /** Disponible real − Reservado bloqueado. */
++  disponible_real_con_bloqueado: number;
+ }
+ 
+ export type TextKey = "clientes_demo" | "llegada_estimada";
+@@ -34,7 +38,9 @@ export const NUM_COLUMNS: { key: NumKey; label: string; kpi: string; hint: strin
+   { key: "en_camino", label: "En camino", kpi: "En camino", hint: "Compras confirmadas que todavía no ingresaron." },
+   { key: "disponible_mas_camino", label: "Disponible + en camino", kpi: "Disponible + en camino", hint: "Disponible real + En camino." },
+   { key: "comprometido", label: "Comprometido", kpi: "Comprometido", hint: "Facturado al cliente pero aún no remitido." },
++  { key: "reservado_bloqueado", label: "Reservado bloqueado", kpi: "Reservado bloqueado", hint: "Pedidos en estado operativo «Bloqueado» todavía sin facturar (ni en Odoo ni en SAP), pendientes de entrega." },
+   { key: "disponible_real", label: "Disponible real", kpi: "Disponible real", hint: "Lo que realmente se puede vender: Disponible − Comprometido." },
++  { key: "disponible_real_con_bloqueado", label: "Disponible real c/ bloqueado", kpi: "Disponible real c/ bloqueado", hint: "Disponible real − Reservado bloqueado: lo que quedaría si se liberan los pedidos bloqueados." },
+ ];
+ 
+ export const TEXT_COLUMNS: { key: TextKey; label: string; hint: string; after: NumKey }[] = [
+diff --git a/src/styles.css b/src/styles.css
+index 4b9d413..c430ffb 100644
+--- a/src/styles.css
++++ b/src/styles.css
+@@ -59,6 +59,8 @@ thead th {
+ }
+ thead th.num { text-align: center; min-width: 96px; }
+ thead th.h-disponible_real { background: var(--green); }
++thead th.h-reservado_bloqueado { background: #b4530a; }
++thead th.h-disponible_real_con_bloqueado { background: #4b6b2f; }
+ tbody tr:nth-child(even) td { background: var(--zebra); }
+ tbody tr:nth-child(odd) td { background: #fff; }
+ tbody tr:hover td { background: #e8f1f2; }
+@@ -97,6 +99,8 @@ td.c-demo.pos        { color: #6b3fa0; font-weight: 700; }
+ td.c-total_fisico    { font-weight: 700; }
+ td.c-disponible_mas_camino, td.c-comprometido { color: var(--teal); font-weight: 700; }
+ td.c-disponible_real { background: var(--green-soft) !important; color: var(--green); font-weight: 800; font-size: 14px; }
++td.c-reservado_bloqueado.pos { background: #fdeee3 !important; color: #b4530a; font-weight: 700; }
++td.c-disponible_real_con_bloqueado { font-weight: 700; color: #4b6b2f; }
+ td.neg { background: var(--neg-bg) !important; color: var(--neg) !important; font-weight: 700; }
+ 
+ td.empty { text-align: center; color: var(--muted); padding: 30px; }
+diff --git a/supabase/functions/sync-odoo/index.ts b/supabase/functions/sync-odoo/index.ts
+index 86e7f36..61d40ed 100644
+--- a/supabase/functions/sync-odoo/index.ts
++++ b/supabase/functions/sync-odoo/index.ts
+@@ -60,10 +60,27 @@ const DOMAIN_EN_CAMINO = [
+   ["state", "not in", ["done", "cancel"]],
+   ["purchase_line_id", "!=", false],
+ ];
++// Comprometido = facturado no remitido. Cuenta como facturado lo facturado en Odoo
++// (qty_invoiced > 0) o las órdenes migradas de SAP que tienen N° de factura SAP
++// (en Odoo esas líneas quedan con qty_invoiced = 0).
+ const DOMAIN_COMPROMETIDO = [
+   ["picking_type_id.code", "=", "outgoing"],
+   ["state", "not in", ["done", "cancel"]],
++  ["sale_line_id", "!=", false],
++  "|",
+   ["sale_line_id.qty_invoiced", ">", 0],
++  ["sale_line_id.order_id.x_studio_sap_factura_nro", "!=", false],
++];
++// Reservado bloqueado = salidas pendientes de órdenes con Estado operativo "Bloqueado"
++// que NO están facturadas (ni en Odoo ni en SAP). Es el complemento exacto de
++// DOMAIN_COMPROMETIDO dentro de las bloqueadas, así nada se cuenta dos veces.
++const DOMAIN_RESERVADO_BLOQUEADO = [
++  ["picking_type_id.code", "=", "outgoing"],
++  ["state", "not in", ["done", "cancel"]],
++  ["sale_line_id", "!=", false],
++  ["sale_line_id.order_id.x_estado_operativo", "=", "bloqueado"],
++  ["sale_line_id.qty_invoiced", "<=", 0],
++  ["sale_line_id.order_id.x_studio_sap_factura_nro", "=", false],
+ ];
+ 
+ // ---------- Autorización ----------------------------------------------
+@@ -98,16 +115,17 @@ Deno.serve(async (req) => {
+     admin.from("sync_runs").update({ finished_at: new Date().toISOString(), ...patch }).eq("id", run!.id);
+ 
+   try {
+-    const [warehouses, locations, quants, incoming, committed] = await Promise.all([
++    const [warehouses, locations, quants, incoming, committed, blocked] = await Promise.all([
+       searchReadAll<OdooWarehouse>("stock.warehouse", [], ["name", "code"]),
+       searchReadAll<OdooLocation>("stock.location", [["usage", "=", "internal"]], ["name", "warehouse_id"], { active_test: false }),
+       searchReadAll<OdooQuant>("stock.quant", DOMAIN_QUANTS, ["product_id", "location_id", "quantity", "lot_id"]),
+       searchReadAll<OdooMove>("stock.move", DOMAIN_EN_CAMINO, ["product_id", "product_qty", "picking_type_id", "date"]),
+       searchReadAll<OdooMove>("stock.move", DOMAIN_COMPROMETIDO, ["product_id", "product_qty", "picking_type_id"]),
++      searchReadAll<OdooMove>("stock.move", DOMAIN_RESERVADO_BLOQUEADO, ["product_id", "product_qty", "picking_type_id"]),
+     ]);
+ 
+-    const ptIds = [...new Set([...incoming, ...committed].map((m) => (m.picking_type_id ? m.picking_type_id[0] : 0)).filter(Boolean))];
+-    const productIds = productIdsToShow(quants, incoming, committed);
++    const ptIds = [...new Set([...incoming, ...committed, ...blocked].map((m) => (m.picking_type_id ? m.picking_type_id[0] : 0)).filter(Boolean))];
++    const productIds = productIdsToShow(quants, incoming, committed, blocked);
+ 
+     // Productos que hoy están en Consignación-Demo (para buscar a qué cliente se entregaron)
+     const demoLocIds = new Set(locations.filter((l) => DEMO_LOCATION_NAMES.includes(l.name)).map((l) => l.id));
+@@ -115,13 +133,16 @@ Deno.serve(async (req) => {
+       .filter((q) => q.location_id && demoLocIds.has(q.location_id[0]) && q.product_id)
+       .map((q) => (q.product_id as [number, string])[0]))];
+ 
++    // Todos los productos activos de tipo "Bienes" de Odoo, más los que tengan movimiento.
++    const DOMAIN_PRODUCTS = productIds.length
++      ? ["|", ["type", "=", "consu"], ["id", "in", productIds]]
++      : [["type", "=", "consu"]];
++
+     const [pickingTypes, products, demoMoveLines] = await Promise.all([
+       ptIds.length
+         ? searchReadAll<OdooPickingType>("stock.picking.type", [["id", "in", ptIds]], ["warehouse_id"], { active_test: false })
+         : Promise.resolve([] as OdooPickingType[]),
+-      productIds.length
+-        ? searchReadAll<OdooProduct>("product.product", [["id", "in", productIds]], ["default_code", "name", "categ_id"])
+-        : Promise.resolve([] as OdooProduct[]),
++      searchReadAll<OdooProduct>("product.product", DOMAIN_PRODUCTS, ["default_code", "name", "categ_id"]),
+       demoProductIds.length
+         ? searchReadAllOrdered<OdooMoveLine>("stock.move.line", [
+             ["location_dest_id.usage", "=", "internal"],
+@@ -132,7 +153,7 @@ Deno.serve(async (req) => {
+         : Promise.resolve([] as OdooMoveLine[]),
+     ]);
+ 
+-    const snap = buildSnapshot({ warehouses, locations, quants, incoming, committed, pickingTypes, products, demoMoveLines });
++    const snap = buildSnapshot({ warehouses, locations, quants, incoming, committed, blocked, pickingTypes, products, demoMoveLines });
+ 
+     const { data: n, error } = await admin.rpc("replace_snapshot", {
+       p_warehouses: snap.warehouses, p_products: snap.products, p_stock: snap.stock,
+@@ -140,8 +161,17 @@ Deno.serve(async (req) => {
+     });
+     if (error) throw new Error(`Supabase: ${error.message}`);
+ 
++    // Reservado bloqueado: se escribe aparte sobre las filas recién cargadas
++    const reservado = snap.stock
++      .filter((s) => s.reservado_bloqueado !== 0)
++      .map((s) => ({ product_id: s.product_id, warehouse_id: s.warehouse_id, qty: s.reservado_bloqueado }));
++    if (reservado.length) {
++      const { error: e2 } = await admin.rpc("set_reservado_bloqueado", { p_rows: reservado });
++      if (e2) throw new Error(`Supabase (reservado bloqueado): ${e2.message}`);
++    }
++
+     await finish({ status: "ok", products: snap.products.length, rows: n });
+-    return json({ ok: true, products: snap.products.length, rows: n });
++    return json({ ok: true, products: snap.products.length, rows: n, reservado_bloqueado: reservado.length });
+   } catch (e) {
+     const message = e instanceof Error ? e.message : String(e);
+     console.error(message);
+diff --git a/supabase/functions/sync-odoo/transform.ts b/supabase/functions/sync-odoo/transform.ts
+index 3e3c3a8..5a3aece 100644
+--- a/supabase/functions/sync-odoo/transform.ts
++++ b/supabase/functions/sync-odoo/transform.ts
+@@ -40,6 +40,8 @@ export interface StockRow {
+   zona_franca: number;
+   en_camino: number;
+   comprometido: number;
++  /** Pendiente de entrega de órdenes en estado operativo "Bloqueado" que todavía no se facturaron. */
++  reservado_bloqueado: number;
+ }
+ 
+ /** En camino agrupado por día de llegada (columna "Llegada estimada"). */
+@@ -65,10 +67,10 @@ const id = (v: M2O) => (v ? v[0] : null);
+ const round = (n: number) => Math.round(n * 10000) / 10000;
+ 
+ /** Ids de productos que la lista de Odoo mostraría (stock interno ≠ 0, en camino o comprometido). */
+-export function productIdsToShow(quants: OdooQuant[], incoming: OdooMove[], committed: OdooMove[]): number[] {
++export function productIdsToShow(quants: OdooQuant[], incoming: OdooMove[], committed: OdooMove[], blocked: OdooMove[] = []): number[] {
+   const ids = new Set<number>();
+   for (const q of quants) if (q.quantity !== 0 && id(q.product_id)) ids.add(id(q.product_id)!);
+-  for (const m of [...incoming, ...committed]) if (id(m.product_id)) ids.add(id(m.product_id)!);
++  for (const m of [...incoming, ...committed, ...blocked]) if (id(m.product_id)) ids.add(id(m.product_id)!);
+   return [...ids].sort((a, b) => a - b);
+ }
+ 
+@@ -78,6 +80,8 @@ export function buildSnapshot(input: {
+   quants: OdooQuant[];
+   incoming: OdooMove[];
+   committed: OdooMove[];
++  /** Salidas pendientes de órdenes bloqueadas sin facturar. */
++  blocked?: OdooMove[];
+   pickingTypes: OdooPickingType[];
+   products: OdooProduct[];
+   /** Entradas hechas a Consignación-Demo, de la más nueva a la más vieja. */
+@@ -93,7 +97,7 @@ export function buildSnapshot(input: {
+     let r = rows.get(key);
+     if (!r) {
+       r = { product_id: productId, warehouse_id: warehouseId, disponible: 0, no_conforme: 0, demo: 0,
+-            control_calidad: 0, zona_franca: 0, en_camino: 0, comprometido: 0 };
++            control_calidad: 0, zona_franca: 0, en_camino: 0, comprometido: 0, reservado_bloqueado: 0 };
+       rows.set(key, r);
+     }
+     return r;
+@@ -110,7 +114,7 @@ export function buildSnapshot(input: {
+     if (bucket) r[bucket] += q.quantity;
+   }
+ 
+-  const addMoves = (moves: OdooMove[], field: "en_camino" | "comprometido") => {
++  const addMoves = (moves: OdooMove[], field: "en_camino" | "comprometido" | "reservado_bloqueado") => {
+     for (const m of moves) {
+       const pid = id(m.product_id);
+       if (!pid || !validProducts.has(pid)) continue;
+@@ -120,12 +124,19 @@ export function buildSnapshot(input: {
+   };
+   addMoves(input.incoming, "en_camino");
+   addMoves(input.committed, "comprometido");
++  addMoves(input.blocked ?? [], "reservado_bloqueado");
++
++  // Todos los productos de Odoo aparecen en el monitor: los que no tienen stock ni
++  // movimientos van con una fila en cero en "Sin depósito".
++  const withRow = new Set([...rows.values()].map((r) => r.product_id));
++  for (const p of input.products) if (!withRow.has(p.id)) row(p.id, NO_WAREHOUSE.id);
+ 
+   const stock = [...rows.values()].map((r) => ({
+     ...r,
+     disponible: round(r.disponible), no_conforme: round(r.no_conforme), demo: round(r.demo),
+     control_calidad: round(r.control_calidad), zona_franca: round(r.zona_franca),
+     en_camino: round(r.en_camino), comprometido: round(r.comprometido),
++    reservado_bloqueado: round(r.reservado_bloqueado),
+   }));
+ 
+   // ---- Llegada estimada: en camino sumado por producto × depósito × día
+diff --git a/supabase/migrations/20261022170000_reservado_bloqueado.sql b/supabase/migrations/20261022170000_reservado_bloqueado.sql
+new file mode 100644
+index 0000000..dabf44c
+--- /dev/null
++++ b/supabase/migrations/20261022170000_reservado_bloqueado.sql
+@@ -0,0 +1,43 @@
++-- Columna "Reservado bloqueado": salidas pendientes de órdenes con Estado operativo
++-- "Bloqueado" que todavía no se facturaron (ni en Odoo ni en SAP).
++-- (Aplicada en producción el 22/10/2026.)
++
++alter table public.stock_by_warehouse add column if not exists reservado_bloqueado numeric not null default 0;
++
++-- replace_snapshot no se modifica: inserta las filas con reservado_bloqueado = 0 (default)
++-- y la Edge Function completa el valor después con esta función.
++create or replace function public.set_reservado_bloqueado(p_rows jsonb)
++returns integer language plpgsql security definer set search_path to 'public' as $$
++declare n integer;
++begin
++  update public.stock_by_warehouse sw
++     set reservado_bloqueado = x.qty
++    from jsonb_to_recordset(p_rows) as x(product_id integer, warehouse_id integer, qty numeric)
++   where sw.product_id = x.product_id and sw.warehouse_id = x.warehouse_id;
++  get diagnostics n = row_count;
++  return n;
++end;
++$$;
++revoke execute on function public.set_reservado_bloqueado(jsonb) from public, anon, authenticated;
++grant execute on function public.set_reservado_bloqueado(jsonb) to service_role;
++
++-- Lo mismo que public.monitor() más las dos columnas nuevas. La web usa esta.
++create or replace function public.monitor_v2(p_warehouse_ids integer[] default null)
++ returns table(product_id integer, sku text, name text, category_id integer, category text, disponible numeric, no_conforme numeric, demo numeric, clientes_demo text, control_calidad numeric, zona_franca numeric, total_fisico numeric, en_camino numeric, llegada_estimada text, proxima_llegada date, disponible_mas_camino numeric, comprometido numeric, disponible_real numeric, reservado_bloqueado numeric, disponible_real_con_bloqueado numeric)
++ language sql stable set search_path to 'public'
++as $$
++  select m.product_id, m.sku, m.name, m.category_id, m.category, m.disponible, m.no_conforme, m.demo,
++         m.clientes_demo, m.control_calidad, m.zona_franca, m.total_fisico, m.en_camino,
++         m.llegada_estimada, m.proxima_llegada, m.disponible_mas_camino, m.comprometido, m.disponible_real,
++         coalesce(r.qty, 0) as reservado_bloqueado,
++         m.disponible_real - coalesce(r.qty, 0) as disponible_real_con_bloqueado
++  from public.monitor(p_warehouse_ids) m
++  left join (
++    select sw.product_id, sum(sw.reservado_bloqueado) as qty
++    from public.stock_by_warehouse sw
++    where p_warehouse_ids is null or sw.warehouse_id = any (p_warehouse_ids)
++    group by sw.product_id
++  ) r on r.product_id = m.product_id
++  order by m.sku nulls last, m.name;
++$$;
++grant execute on function public.monitor_v2(integer[]) to anon, authenticated, service_role;
+diff --git a/tests/transform.test.ts b/tests/transform.test.ts
+index 5c86b36..4ec2cbc 100644
+--- a/tests/transform.test.ts
++++ b/tests/transform.test.ts
+@@ -101,6 +101,17 @@ describe("sync transform", () => {
+   it("agrega 'Sin depósito' y respeta la lista de productos a mostrar", () => {
+     expect(snap.warehouses[0]).toMatchObject({ id: 0 });
+     expect(productIdsToShow(quants, incoming, committed)).toEqual([1, 2, 3, 4, 5]);
++  });});
++
++describe("reservado bloqueado", () => {
++  const blocked = [{ product_id: [1, "P1"], product_qty: 3, picking_type_id: [200, "Entregas CBA"] }] as never[];
++  const snap = buildSnapshot({ warehouses, locations, quants, incoming, committed, blocked, pickingTypes, products });
++  it("suma las salidas de pedidos bloqueados sin tocar el comprometido", () => {
++    const r = snap.stock.find((s) => s.product_id === 1 && s.warehouse_id === 1);
++    expect(r).toMatchObject({ comprometido: 6, reservado_bloqueado: 3 });
++  });
++  it("los productos con solo reservado bloqueado entran en la lista a mostrar", () => {
++    expect(productIdsToShow([], [], [], [{ product_id: [9, "P9"], product_qty: 1, picking_type_id: false }])).toEqual([9]);
+   });
+ });
+ 
+@@ -108,7 +119,7 @@ const row = (o: Partial<MonitorRow>): MonitorRow => ({
+   product_id: 1, sku: "A", name: "x", category_id: 1, category: "c", disponible: 0, no_conforme: 0, demo: 0,
+   clientes_demo: null, control_calidad: 0, zona_franca: 0, total_fisico: 0, en_camino: 0,
+   llegada_estimada: null, proxima_llegada: null, disponible_mas_camino: 0,
+-  comprometido: 0, disponible_real: 0, ...o,
++  comprometido: 0, disponible_real: 0, reservado_bloqueado: 0, disponible_real_con_bloqueado: 0, ...o,
+ });
+ 
+ describe("web logic", () => {
+-- 
+2.43.0
