@@ -6,7 +6,7 @@ export type M2O = [number, string] | false;
 export interface OdooWarehouse { id: number; name: string; code: string | false }
 export interface OdooLocation { id: number; name: string; warehouse_id: M2O }
 export interface OdooQuant { product_id: M2O; location_id: M2O; quantity: number; lot_id?: M2O }
-export interface OdooMove { product_id: M2O; product_qty: number; picking_type_id: M2O; date?: string | false }
+export interface OdooMove { product_id: M2O; product_qty: number; picking_type_id: M2O; date?: string | false; date_deadline?: string | false }
 /** Movimiento hecho hacia Consignación-Demo: dice a qué cliente se entregó cada serie. */
 export interface OdooMoveLine { product_id: M2O; lot_id: M2O; picking_partner_id: M2O; date: string | false }
 export interface OdooPickingType { id: number; warehouse_id: M2O }
@@ -143,9 +143,12 @@ export function buildSnapshot(input: {
   const inc = new Map<string, IncomingRow>();
   for (const m of input.incoming) {
     const pid = id(m.product_id);
-    if (!pid || !validProducts.has(pid) || !m.date) continue;
+    // La fecha límite sigue a la "Entrega esperada" de la OC aunque se reprograme después de confirmada;
+    // la fecha programada (`date`) puede quedar en el día de confirmación. Se usa `date` solo si no hay límite.
+    const arrival = m.date_deadline || m.date;
+    if (!pid || !validProducts.has(pid) || !arrival) continue;
     const wh = ptWarehouse.get(id(m.picking_type_id) ?? -1) ?? 0;
-    const day = localDay(m.date);
+    const day = localDay(arrival);
     const key = `${pid}:${wh}:${day}`;
     const r = inc.get(key) ?? { product_id: pid, warehouse_id: wh, day, qty: 0 };
     r.qty += m.product_qty;
