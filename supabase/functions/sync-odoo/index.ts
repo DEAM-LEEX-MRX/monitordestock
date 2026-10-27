@@ -119,7 +119,7 @@ Deno.serve(async (req) => {
       searchReadAll<OdooWarehouse>("stock.warehouse", [], ["name", "code"]),
       searchReadAll<OdooLocation>("stock.location", [["usage", "=", "internal"]], ["name", "warehouse_id"], { active_test: false }),
       searchReadAll<OdooQuant>("stock.quant", DOMAIN_QUANTS, ["product_id", "location_id", "quantity", "lot_id"]),
-      searchReadAll<OdooMove>("stock.move", DOMAIN_EN_CAMINO, ["product_id", "product_qty", "picking_type_id", "date"]),
+      searchReadAll<OdooMove>("stock.move", DOMAIN_EN_CAMINO, ["product_id", "product_qty", "picking_type_id", "date", "date_deadline"]),
       searchReadAll<OdooMove>("stock.move", DOMAIN_COMPROMETIDO, ["product_id", "product_qty", "picking_type_id"]),
       searchReadAll<OdooMove>("stock.move", DOMAIN_RESERVADO_BLOQUEADO, ["product_id", "product_qty", "picking_type_id"]),
     ]);
